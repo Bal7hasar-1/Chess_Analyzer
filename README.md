@@ -79,10 +79,12 @@ According to Chess.com Public API rules, every request must contain a `User-Agen
 
 Before launching, specify your details in the following files:
 
-<h3 align="center">Main (Main Settings)</h3>
-####  To launch the graphical interface - file `chess_gui.py` (lines 25 – 29):
-* You can leave `USERNAME = ""` empty - then upon startup the program will ask for your username in a pop-up window, or you can enter your username right away.
-* Be sure to fill in `USER_AGENT` (specify your username or email to identify requests on the Chess.com server):
+<h3 align="center">MAIN</h3>
+
+#### To launch the graphical interface - file `chess_gui.py` (lines 25 – 29):
+
+- You can leave `USERNAME = ""` empty - then upon startup the program will ask for your username in a pop-up window, or you can enter your username right away.
+- Be sure to fill in `USER_AGENT` (specify your username or email to identify requests on the Chess.com server):
 ```python
 USERNAME = ""  # Leave empty for the input window or enter "Your_Username"
 STOCKFISH_PATH = os.path.join(BASE_DIR, "stockfish", "stockfish-windows-x86-64-universal.exe")
@@ -103,7 +105,7 @@ headers = {
 ```
 * On **lines 32–33**, specify the username of the player whose games you want to download, and the year:
 ```python
-username = "Your_Username"
+username = "Username"
 year = 2026
 ```
 
@@ -121,34 +123,7 @@ python chess_gui.py
 
 ---
 
-##  Building Your Own Dataset and Speeding Up Stockfish
 
-If you want to independently build a dataset from downloaded `.pgn` files and retrain the model from scratch, the scripts are run in sequence:
-1. `python scripts/download_pgn.py` - downloads game archives into `data/raw_pgn/`.
-2. `python scripts/extract_errors.py` - analyzes games via Stockfish and saves errors to `data/chess_errors_dataset.csv`.
-3. `python scripts/build_features.py` - calculates mathematical features (material, hanging pieces, mobility, checks) into `data/chess_features_dataset.csv`.
-
-> [!TIP] How to speed up game analysis in `extract_errors.py` by 4–10x
-> Turning thousands of PGN games into tabular data requires calculating every move with the Stockfish engine, which **takes a lot of time**. By default, the engine uses only 1 CPU core and 16 MB of memory. You can significantly speed up the process by allocating more of your PC's resources to Stockfish in the `scripts/extract_errors.py` file:
->
-> **1. Increase the number of threads (`Threads`) and RAM size for hash tables (`Hash`):**
-> Find the engine launch line `with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:` and add the resource configuration right after it:
-> ```python
-> with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
->     # Specify half/most of your CPU threads and 1024–2048 MB of RAM
->     engine.configure({"Threads": 6, "Hash": 2048})
-> ```
->
-> **2. Add a time limit per move:**
-> Replace the call `engine.analyse(board, chess.engine.Limit(depth=ENGINE_DEPTH))` with a combined limit (for example, no longer than `0.1` seconds per position):
-> ```python
-> engine.analyse(board, chess.engine.Limit(depth=ENGINE_DEPTH, time=0.1))
-> ```
->
-> **3. Skip early book moves in the opening:**
-> In the game move parsing loop, you can skip the first 8–10 half-moves (`if ply < 10: continue`) so as not to waste CPU time on standard opening theory.
-
----
 ## 📙 Custom Model Training and Recommendations
 
 The repository already includes a pre-trained model (`models/chess_error_model.joblib`), but you can build your own dataset from scratch and retrain the classifier.
@@ -171,7 +146,7 @@ The project uses a **Random Forest** (`scikit-learn`) algorithm that takes the e
 
 * **How a Model Understands Mistakes:  Centipawn Loss:** A small drop indicates an `inaccuracy`, while a massive drop (300+ points) signals a `blunder` or `tactical_error`.  **Material Balance:** Losing pieces without compensation is a clear marker of a tactical miscalculation. * **Attackers vs. Defenders:** Moving a piece to a square with more attackers than defenders perfectly triggers a `hanging_piece` classification.  **Mobility:** A sudden drop in available legal moves (e.g., a trapped piece) without material loss points to a `positional` error.
 
-* **Dataset Size:** For reliable classification accuracy, aim to collect at least 10,000–20,000 labeled error positions (the default model included in this project was trained on 162,000+ positions).
+* **Dataset Size:** For reliable classification accuracy, aim to collect at least 30,000–60,000 labeled error positions (the default model included in this project was trained on 162,000+ positions).
 
 > [!TIP] How to speed up game analysis in `extract_errors.py` by 4–10x
 > Parsing thousands of PGN games with Stockfish is computationally intensive. By default, the engine uses only 1 CPU core and 16 MB of RAM. To significantly speed up dataset generation, open `scripts/extract_errors.py` and apply the following tweaks:
