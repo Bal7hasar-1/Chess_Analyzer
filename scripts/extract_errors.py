@@ -61,7 +61,7 @@ def extract_errors():
                             continue
 
                         games_processed += 1
-                        print(f"Партия {games_processed}: {white_player} vs {black_player} | Собрано ошибок: {len(dataset)}")
+                        print(f"Game {games_processed}: {white_player} vs {black_player} | Mistakes collected: {len(dataset)}")
 
                         board = game.board()
                         
