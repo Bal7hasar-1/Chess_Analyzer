@@ -44,16 +44,16 @@ with open(output_filename, "w", encoding="utf-8") as pgn_file:
     
     
     for month in range(1, 13):
-        print(f"Скачиваю партии за {month:02d}.{year}...")
+        print(f"Downloading games for {month:02d}.{year}...")
         
         
         games_list = fetch_chesscom_games(username, year, month)
         
         if not games_list:
-            print("  -> Партий нет (вы не играли в этом месяце или месяц еще не наступил)")
+            print("  -> No games found (you haven't played this month, or the month hasn't started yet)")
             continue
             
-        print(f"  -> Найдено партий: {len(games_list)}")
+        print(f"  -> Games found: {len(games_list)}")
         
         
         for game in games_list:
@@ -62,4 +62,4 @@ with open(output_filename, "w", encoding="utf-8") as pgn_file:
             
         time.sleep(0.7)
 
-print(f"\nГотово! Все партии успешно сохранены в локальный файл: {output_filename}")
+print(f"\nDone! All games successfully saved to a local file.: {output_filename}")

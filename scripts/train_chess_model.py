@@ -10,7 +10,7 @@ import joblib
 INPUT_CSV = "data/chess_features_dataset.csv"
 OUTPUT_MODEL = "models/chess_error_model.joblib"
 
-print(f"Загрузка данных из {INPUT_CSV}...")
+print(f"Loading data from {INPUT_CSV}...")
 df = pd.read_csv(INPUT_CSV)
 
 
@@ -30,8 +30,8 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-print(f"Размер обучающей выборки: {len(X_train)} примеров")
-print(f"Размер тестовой выборки: {len(X_test)} примеров\n")
+print(f"Training dataset size: {len(X_train)} examples")
+print(f"Test set size: {len(X_test)} examples\n")
 
 
 model_pipeline = Pipeline(steps=[
@@ -45,14 +45,14 @@ model_pipeline = Pipeline(steps=[
 ])
 
 
-print("Обучение RandomForest...")
+print("Training RandomForest...")
 model_pipeline.fit(X_train, y_train)
 
-# 5. Оценка качества на тестовой выборке
-print("\n=== РЕЗУЛЬТАТЫ НА ТЕСТОВОЙ ВЫБОРКЕ ===")
+
+print("\n=== TEST SET RESULTS ===")
 y_pred = model_pipeline.predict(X_test)
 print(classification_report(y_test, y_pred))
 
 
 joblib.dump(model_pipeline, OUTPUT_MODEL)
-print(f"\nМодель успешно сохранена в файл: {OUTPUT_MODEL}")
+print(f"\nModel successfully saved to a file: {OUTPUT_MODEL}")

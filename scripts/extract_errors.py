@@ -25,14 +25,14 @@ CP_LOSS_THRESHOLD = 50
 def extract_errors():
     pgn_files = glob.glob(os.path.join(PGN_DIR, "*.pgn"))
     if not pgn_files:
-        print(f"Ошибка: В папке {PGN_DIR} не найдено ни одного файла .pgn")
+        print(f"Error: No files found in the {PGN_DIR} directory. .pgn")
         return pd.DataFrame()
 
-    print(f"Найдено PGN-файлов: {len(pgn_files)}")
+    print(f"PGN files found: {len(pgn_files)}")
     for f in pgn_files:
         print(f" - {os.path.basename(f)}")
-    print(f"\nЗапуск Stockfish: {STOCKFISH_PATH}")
-    print("Для досрочной остановки и сохранения собранных данных нажмите Ctrl+C.\n")
+    print(f"\nStarting Stockfish: {STOCKFISH_PATH}")
+    print("Press Ctrl+C to stop early and save the collected data.\n")
 
     dataset = []
     games_processed = 0
@@ -101,17 +101,17 @@ def extract_errors():
                             prev_info = curr_info
 
     except KeyboardInterrupt:
-        print("\n[!] Анализ остановлен пользователем (Ctrl+C). Сохраняем собранные данные...")
+        print("\n[!] Analysis stopped by user (Ctrl+C). Saving collected data...")
     except FileNotFoundError as e:
-        print(f"\nОшибка: Не найден файл движка или PGN.\n{e}")
+        print(f"\nError: Engine or PGN file not found..\n{e}")
         return pd.DataFrame()
     except Exception as e:
-        print(f"\nПроизошла ошибка при анализе: {e}. Сохраняем то, что успели собрать...")
+        print(f"\nAn error occurred during analysis: {e}. Saving collected data...")
 
     elapsed_time = round(time.time() - start_time, 1)
-    print(f"\n=== ГОТОВО ===")
-    print(f"Проанализировано партий: {games_processed} за {elapsed_time} сек.")
-    print(f"Найдено ошибок (cp_loss >= {CP_LOSS_THRESHOLD}): {len(dataset)}")
+    print(f"\n=== DONE ===")
+    print(f"Games analyzed: {games_processed} in {elapsed_time} sec.")
+    print(f"Mistakes found (cp_loss >= {CP_LOSS_THRESHOLD}): {len(dataset)}")
 
     return pd.DataFrame(dataset)
 
@@ -121,4 +121,4 @@ if __name__ == "__main__":
 
     if not df_errors.empty:
         df_errors.to_csv(OUTPUT_CSV, index=False)
-        print(f"Датасет успешно сохранен в: {OUTPUT_CSV}")
+        print(f"Dataset successfully saved to: {OUTPUT_CSV}")

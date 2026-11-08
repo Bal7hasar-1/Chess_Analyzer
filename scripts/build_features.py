@@ -91,21 +91,21 @@ def calculate_features(row):
 
 if __name__ == "__main__":
     if not os.path.exists(INPUT_CSV):
-        print(f"Ошибка: Файл {INPUT_CSV} не найден. Сначала запустите extract_errors.py")
+        print(f"Error: File {INPUT_CSV}  not found. Please run extract_errors.py first.")
         exit()
 
-    print(f"Чтение сырых ошибок из: {INPUT_CSV}")
+    print(f"Reading raw errors from: {INPUT_CSV}")
     df = pd.read_csv(INPUT_CSV)
 
     start_time = time.time()
-    print(f"Генерация признаков для {len(df)} позиций...")
+    print(f"Generating features for {len(df)} positions...")
 
     features_df = df.apply(calculate_features, axis=1)
     df_final = pd.concat([df, features_df], axis=1)
     df_final = df_final.dropna(subset=["error_class"])
 
     df_final.to_csv(OUTPUT_CSV, index=False)
-    print(f"\n=== ГОТОВО за {round(time.time() - start_time, 1)} сек. ===")
-    print(f"Датасет сохранен в: {OUTPUT_CSV}")
-    print("\nРаспределение типов ошибок:")
+    print(f"\n=== DONE in {round(time.time() - start_time, 1)} sec. ===")
+    print(f"Dataset saved to: {OUTPUT_CSV}")
+    print("\nError type distribution:")
     print(df_final["error_class"].value_counts())
