@@ -1,12 +1,13 @@
 import os
 import io
 import math
+import webbrowser
 import threading
 import importlib
 import importlib.util
 import requests
 import tkinter as tk
-from tkinter import messagebox, simpledialog, filedialog
+from tkinter import messagebox, filedialog
 import chess
 import chess.pgn
 import chess.engine
@@ -23,10 +24,11 @@ if HAS_PIL:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 USERNAME = ""
+TARGET_USERNAME = ""
 STOCKFISH_PATH = os.path.join(BASE_DIR, "stockfish", "stockfish-windows-x86-64-universal.exe")
 MODEL_PATH = os.path.join(BASE_DIR, "models", "chess_error_model.joblib")
 AVATAR_IMAGE_PATH = os.path.join(BASE_DIR, "assets", "images.jpg")
-USER_AGENT = "ML-Chess-Analyzer/2.2 (user: )"
+USER_AGENT = "ML-Chess-Analyzer/2.4 (user: )"
 
 ENGINE_DEPTH = 12
 CP_LOSS_THRESHOLD = 50
@@ -58,6 +60,20 @@ THEME = {
     
     "eval_white": "#E8DCC7",       
     "eval_black": "#26231F",       
+}
+
+# Цвета значков оценок в точности по первому референсу (без фонового кружка)
+BADGE_STYLE = {
+    "brilliant": {"color": "#26C2A3"},
+    "great":     {"color": "#749BBF"},
+    "book":      {"color": "#D5A47D"},
+    "best":      {"color": "#81B64C"},
+    "excellent": {"color": "#81B64C"},
+    "good":      {"color": "#95B776"},
+    "inaccuracy":{"color": "#F7C045"},
+    "mistake":   {"color": "#E58F3A"},
+    "miss":      {"color": "#EE6B5E"},
+    "blunder":   {"color": "#FA412D"},
 }
 
 PIECE_VALUES = {
@@ -95,6 +111,11 @@ TRANSLATIONS = {
         "card_moves": "Сыграно: {played}   →   Лучше было: {best}",
         "card_btn_best": "Показать лучший ход",
         "card_btn_combo": "Комбинация",
+        "history_title": "История ходов",
+        "history_empty": "Сделайте ход (Вперёд ▶)",
+        "graph_title": "График преимущества",
+        "acc_label": "Точность: {acc:.1f}%",
+        "acc_short": "Точн: Б {w:.1f}% • Ч {b:.1f}%",
         "err_titles": {
             "blunder": "Грубый зевок",
             "hanging_piece": "Фигура под боем",
@@ -138,6 +159,11 @@ TRANSLATIONS = {
         "card_moves": "Played: {played}   →   Best was: {best}",
         "card_btn_best": "Show Best Move",
         "card_btn_combo": "Combination",
+        "history_title": "Move History",
+        "history_empty": "Make a move (Next ▶)",
+        "graph_title": "Advantage Graph",
+        "acc_label": "Accuracy: {acc:.1f}%",
+        "acc_short": "Acc: W {w:.1f}% • B {b:.1f}%",
         "err_titles": {
             "blunder": "Blunder",
             "hanging_piece": "Hanging Piece",
@@ -220,7 +246,26 @@ BLACK_OPENINGS_BOOK = [
 ]
 
 
-def detect_openings_at_ply(moves_uci: list, pgn_opening_name: str = "", lang: str = "ru"):
+def is_book_ply(moves_uci: list) -> bool:
+    """Проверяет, входит ли текущая последовательность ходов в дебютную книгу."""
+    if not moves_uci or len(moves_uci) > 10:
+        return False
+    for book in (WHITE_OPENINGS_BOOK, BLACK_OPENINGS_BOOK):
+        for item in book:
+            pattern = item[0]
+            if len(moves_uci) <= len(pattern) and moves_uci == pattern[:len(moves_uci)]:
+                return True
+    return False
+
+
+def compute_move_accuracy(cp_loss: float) -> float:
+    """Переводит потерю сантипешек (cp_loss) на ходе в процент точности (0..100%)."""
+    loss = max(0.0, float(cp_loss))
+    acc = 100.0 * math.exp(-0.0038 * loss)
+    return max(0.0, min(100.0, acc))
+
+
+def detect_openings_at_ply(moves_uci: list, pgn_opening_name: str = "", lang: str = "en"):
     """Определяет дебют или гамбит отдельно для Белых и Чёрных на выбранном языке (ru/en)."""
     tr = TRANSLATIONS[lang]
     detecting_str = tr["detecting"]
@@ -279,7 +324,7 @@ def build_localized_error_texts(err: dict, lang: str) -> tuple:
     piece_names = tr["piece_names"]
     on_word = tr["on_sq"]
     hanging_Str = ", ".join(
-        f"{piece_names[p_type]} {on_word} { chess.square_name(sq) }"
+        f"{piece_names[p_type]} {on_word} {chess.square_name(sq)}"
         for p_type, sq in err["hanging_pieces_raw"]
     )
 
@@ -345,7 +390,6 @@ def build_localized_error_texts(err: dict, lang: str) -> tuple:
     return ai_text, combo_title
 
 
-
 def hex_to_rgb(hex_color: str):
     h = hex_color.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -375,8 +419,92 @@ def create_rounded_rect(canvas: tk.Canvas, x1, y1, x2, y2, r=16, **kwargs):
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
+def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radius: float, badge_type: str):
+    """
+    Отрисовывает САМ ЗНАЧОК оценки хода (!!, !, ?!, ?, ??, ★, 📖, ✔, 👍, ✖)
+    соответствующего яркого цвета БЕЗ фонового кружка, с тёмным микро-контуром для читаемости.
+    """
+    if not badge_type or badge_type not in BADGE_STYLE:
+        return
+    col = BADGE_STYLE[badge_type]["color"]
+    shadow = "#161513"
+
+    def draw_outlined_text(txt: str, f_size: int):
+        fnt = ("Segoe UI", f_size, "bold")
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, 1.5)):
+            canvas.create_text(cx + dx, cy + dy, text=txt, fill=shadow, font=fnt)
+        canvas.create_text(cx, cy, text=txt, fill=col, font=fnt)
+
+    if badge_type == "brilliant":
+        draw_outlined_text("!!", max(9, int(radius * 1.45)))
+    elif badge_type == "great":
+        draw_outlined_text("!", max(9, int(radius * 1.50)))
+    elif badge_type == "inaccuracy":
+        draw_outlined_text("?!", max(8, int(radius * 1.35)))
+    elif badge_type == "mistake":
+        draw_outlined_text("?", max(9, int(radius * 1.50)))
+    elif badge_type == "blunder":
+        draw_outlined_text("??", max(8, int(radius * 1.35)))
+    elif badge_type == "best":
+        # Пятиконечная звезда соответствующего цвета
+        pts = []
+        for i in range(10):
+            ang = -math.pi / 2 + i * math.pi / 5
+            r = radius * 0.92 if i % 2 == 0 else radius * 0.40
+            pts.extend([cx + r * math.cos(ang), cy + r * math.sin(ang)])
+        canvas.create_polygon(pts, fill=col, outline=shadow, width=max(1.2, radius * 0.14), joinstyle=tk.ROUND)
+    elif badge_type == "good":
+        # Галочка (Checkmark)
+        lw = max(2.2, radius * 0.34)
+        pts = [
+            cx - radius * 0.65, cy + radius * 0.04,
+            cx - radius * 0.15, cy + radius * 0.55,
+            cx + radius * 0.70, cy - radius * 0.50
+        ]
+        canvas.create_line(pts, fill=shadow, width=lw + 2.2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+        canvas.create_line(pts, fill=col, width=lw, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+    elif badge_type == "miss":
+        # Крестик (X)
+        lw = max(2.2, radius * 0.34)
+        d = radius * 0.55
+        canvas.create_line(cx - d, cy - d, cx + d, cy + d, fill=shadow, width=lw + 2.2, capstyle=tk.ROUND)
+        canvas.create_line(cx - d, cy + d, cx + d, cy - d, fill=shadow, width=lw + 2.2, capstyle=tk.ROUND)
+        canvas.create_line(cx - d, cy - d, cx + d, cy + d, fill=col, width=lw, capstyle=tk.ROUND)
+        canvas.create_line(cx - d, cy + d, cx + d, cy - d, fill=col, width=lw, capstyle=tk.ROUND)
+    elif badge_type == "book":
+        # Открытая книга
+        w = radius * 0.78
+        h = radius * 0.58
+        canvas.create_polygon(
+            [cx, cy - h * 0.7, cx - w, cy - h, cx - w, cy + h * 0.85, cx, cy + h],
+            fill=col, outline=shadow, width=1.4
+        )
+        canvas.create_polygon(
+            [cx, cy - h * 0.7, cx + w, cy - h, cx + w, cy + h * 0.85, cx, cy + h],
+            fill=col, outline=shadow, width=1.4
+        )
+        canvas.create_line(cx, cy - h * 0.7, cx, cy + h, fill=shadow, width=max(1.2, radius * 0.16))
+    elif badge_type == "excellent":
+        # Палец вверх (Thumbs Up)
+        r = radius * 1.25
+        canvas.create_rectangle(
+            cx - r * 0.52, cy - r * 0.05, cx - r * 0.22, cy + r * 0.46,
+            fill=col, outline=shadow, width=1.2
+        )
+        pts = [
+            cx - r * 0.16, cy - r * 0.05,
+            cx - r * 0.02, cy - r * 0.54,
+            cx + r * 0.18, cy - r * 0.48,
+            cx + r * 0.12, cy - r * 0.10,
+            cx + r * 0.50, cy - r * 0.10,
+            cx + r * 0.40, cy + r * 0.46,
+            cx - r * 0.16, cy + r * 0.46,
+        ]
+        canvas.create_polygon(pts, fill=col, outline=shadow, width=1.2, joinstyle=tk.ROUND)
+
+
 def draw_mistakes_knight_avatar(canvas: tk.Canvas, cx: float, cy: float, size: float, photo_cache=None):
-    """Отрисовывает аватарку Mistakes по второму изображению (контур коня на светлом бейдже)."""
+    """Отрисовывает аватарку Mistakes (контур коня на светлом бейдже)."""
     r = size / 2
     create_rounded_rect(
         canvas, cx - r, cy - r, cx + r, cy + r,
@@ -444,13 +572,13 @@ def draw_mistakes_knight_avatar(canvas: tk.Canvas, cx: float, cy: float, size: f
 
 
 def draw_classic_merida_piece(canvas: tk.Canvas, cx: float, cy: float, sq_size: float, piece_type: int, is_white: bool):
-    """Классический векторный рендерер фигур Merida по первому референсу."""
+    """Классический векторный рендерер фигур Merida."""
     r = sq_size * 0.415
     fill_col = "#FFFFFF" if is_white else "#0C0C0C"
     stroke_col = "#0C0C0C"
     inner_col = "#0C0C0C" if is_white else "#FFFFFF"
-    lw = max(1.8, sq_size * 0.038)
-    ilw = max(1.4, sq_size * 0.028)
+    lw = max(1.4, sq_size * 0.038)
+    ilw = max(1.1, sq_size * 0.028)
 
     if piece_type == chess.PAWN:
         body_pts = [
@@ -660,7 +788,6 @@ def draw_classic_merida_piece(canvas: tk.Canvas, cx: float, cy: float, sq_size: 
         canvas.create_line(cx - 0.52 * r, cy + 0.64 * r, cx + 0.52 * r, cy + 0.64 * r, fill=inner_col, width=ilw)
 
 
-
 class RoundedButton(tk.Canvas):
     def __init__(
         self, parent, text: str, command=None,
@@ -727,6 +854,153 @@ class RoundedButton(tk.Canvas):
         self.create_text(w / 2, h / 2, text=self.text, fill=fg, font=("Segoe UI", 9, "bold"))
 
 
+class StartupOnboardingDialog:
+    """Стартовое окно ввода никнеймов Chess.com и проверки наличия Stockfish."""
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.completed = False
+        self.my_username = ""
+        self.target_username = ""
+        self.sf_path = self._auto_detect_stockfish()
+
+        self.win = tk.Toplevel(root)
+        self.win.title("Chess Studio & Mistakes — Setup")
+        self.win.geometry("500x430")
+        self.win.configure(bg=THEME["bg_root"])
+        self.win.resizable(False, False)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self._build_ui()
+
+    def _auto_detect_stockfish(self) -> str:
+        candidates = [
+            STOCKFISH_PATH,
+            os.path.join(BASE_DIR, "stockfish.exe"),
+            os.path.join(os.getcwd(), "stockfish", "stockfish-windows-x86-64-universal.exe"),
+            os.path.join(os.getcwd(), "stockfish.exe"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return ""
+
+    def _build_ui(self):
+        container = tk.Frame(self.win, bg=THEME["bg_panel"], padx=24, pady=20)
+        container.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+
+        tk.Label(
+            container, text="Welcome to Chess Analyzer",
+            bg=THEME["bg_panel"], fg=THEME["text_primary"], font=("Segoe UI", 15, "bold")
+        ).pack(anchor="w", pady=(0, 14))
+
+        tk.Label(
+            container, text="1. Enter your Chess.com username:",
+            bg=THEME["bg_panel"], fg=THEME["text_secondary"], font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
+
+        self.entry_me = tk.Entry(
+            container, bg=THEME["bg_panel_elev"], fg=THEME["text_primary"],
+            insertbackground=THEME["text_primary"], relief=tk.FLAT, font=("Segoe UI", 11)
+        )
+        self.entry_me.pack(fill=tk.X, pady=(4, 14), ipady=6)
+
+        tk.Label(
+            container, text="2. Player whose last game to analyze (leave blank for yourself):",
+            bg=THEME["bg_panel"], fg=THEME["text_secondary"], font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
+
+        self.entry_target = tk.Entry(
+            container, bg=THEME["bg_panel_elev"], fg=THEME["text_primary"],
+            insertbackground=THEME["text_primary"], relief=tk.FLAT, font=("Segoe UI", 11)
+        )
+        self.entry_target.pack(fill=tk.X, pady=(4, 16), ipady=6)
+
+        self.sf_frame = tk.Frame(container, bg=THEME["bg_bubble"], padx=12, pady=10)
+        self.sf_frame.pack(fill=tk.X, pady=(0, 18))
+        self._update_sf_status_ui()
+
+        btn_row = tk.Frame(container, bg=THEME["bg_panel"])
+        btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+
+        self.start_btn = RoundedButton(
+            btn_row, text="Start Analysis ▶", command=self._on_start,
+            bg_color="#2A3328", hover_color="#364233", width=180, height=42
+        )
+        self.start_btn.pack(side=tk.RIGHT)
+
+    def _update_sf_status_ui(self):
+        for w in self.sf_frame.winfo_children():
+            w.destroy()
+
+        if self.sf_path and os.path.exists(self.sf_path):
+            tk.Label(
+                self.sf_frame, text="✓ Stockfish engine found and ready!",
+                bg=THEME["bg_bubble"], fg=THEME["accent_sage"], font=("Segoe UI", 9, "bold")
+            ).pack(anchor="w")
+            tk.Label(
+                self.sf_frame, text=os.path.basename(self.sf_path),
+                bg=THEME["bg_bubble"], fg=THEME["text_muted"], font=("Segoe UI", 8)
+            ).pack(anchor="w")
+        else:
+            tk.Label(
+                self.sf_frame,
+                text="⚠ Stockfish engine not found!\nPlease download Stockfish from the official website, extract it, and select the .exe file:",
+                bg=THEME["bg_bubble"], fg=THEME["accent_terra"], font=("Segoe UI", 9, "bold"),
+                justify=tk.LEFT
+            ).pack(anchor="w", pady=(0, 8))
+
+            actions = tk.Frame(self.sf_frame, bg=THEME["bg_bubble"])
+            actions.pack(fill=tk.X)
+
+            dl_btn = tk.Button(
+                actions, text="🌐 Download Stockfish",
+                command=lambda: webbrowser.open("https://stockfishchess.org/download/"),
+                bg=THEME["accent_ochre"], fg="#161513", relief=tk.FLAT,
+                font=("Segoe UI", 9, "bold"), padx=10, pady=4, cursor="hand2"
+            )
+            dl_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+            browse_btn = tk.Button(
+                actions, text="📁 Locate stockfish.exe...",
+                command=self._browse_sf,
+                bg=THEME["bg_panel_elev"], fg=THEME["text_primary"], relief=tk.FLAT,
+                font=("Segoe UI", 9), padx=10, pady=4, cursor="hand2"
+            )
+            browse_btn.pack(side=tk.LEFT)
+
+    def _browse_sf(self):
+        path = filedialog.askopenfilename(
+            parent=self.win,
+            title="Select Stockfish executable (.exe)",
+            filetypes=[("Executable files", "*.exe"), ("All files", "*.*")]
+        )
+        if path and os.path.exists(path):
+            self.sf_path = path
+            self._update_sf_status_ui()
+
+    def _on_start(self):
+        me = self.entry_me.get().strip()
+        target = self.entry_target.get().strip()
+        if not me:
+            messagebox.showwarning("Username required", "Please enter your Chess.com username.", parent=self.win)
+            return
+        if not self.sf_path or not os.path.exists(self.sf_path):
+            messagebox.showwarning(
+                "Stockfish required",
+                "Stockfish engine was not found.\nClick 'Download Stockfish' to get it from the official site, then select the .exe file.",
+                parent=self.win
+            )
+            return
+
+        self.my_username = me
+        self.target_username = target if target else me
+        self.completed = True
+        self.win.destroy()
+
+    def _on_cancel(self):
+        self.completed = False
+        self.win.destroy()
+
 
 def get_last_game_pgn(username: str) -> str:
     now = datetime.now(timezone.utc)
@@ -744,7 +1018,7 @@ def get_last_game_pgn(username: str) -> str:
         games = fetch_month(prev_month.year, prev_month.month)
 
     if not games:
-        raise ValueError("No games found for the last 2 months / Не найдено сыгранных партий за последние 2 месяца.")
+        raise ValueError(f"No games found for '{username}' in the last 2 months.")
     return games[-1]["pgn"]
 
 
@@ -765,7 +1039,6 @@ def count_hanging_pieces(board: chess.Board, color: chess.Color) -> int:
 
 
 def get_hanging_raw(board: chess.Board, color: chess.Color):
-    """Возвращает список кортежей (piece_type, sq) и список клеток sq для динамической локализации."""
     opponent = not color
     raw_items = []
     squares = []
@@ -794,31 +1067,31 @@ def eval_to_white_ratio(cp_white: int, mate_white: int = None) -> float:
     return max(0.04, min(0.96, ratio))
 
 
-
 class ChessAnalyzerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.lang = "ru"  # Текущий язык интерфейса: "ru" или "en"
-        self.root.title(f"Chess Studio & Mistakes — {USERNAME}")
-        self.root.geometry("1340x860")
-        self.root.minsize(1080, 720)
+        self.lang = "en"  # Английский язык по умолчанию
+        self.root.title(f"Chess Studio & Mistakes — {TARGET_USERNAME}")
+        self.root.geometry("1440x880")
+        self.root.minsize(1180, 740)
         self.root.configure(bg=THEME["bg_root"])
 
         self.photo_cache = {}
 
-        
         self.white_name = ""
         self.black_name = ""
         self.white_elo = ""
         self.black_elo = ""
+        self.white_accuracy = None
+        self.black_accuracy = None
         self.my_color = chess.WHITE
         self.bottom_color = chess.WHITE
 
-        
         self.boards_history = []
         self.moves_history = []
         self.uci_history = []
         self.evals_history = []
+        self.move_meta_history = [None]
         self.errors_by_ply = {}
         self.pgn_opening_name = ""
 
@@ -827,18 +1100,15 @@ class ChessAnalyzerGUI:
         self.unlocked_plies = set()
         self.analysis_finished = False
 
-        
         self.displayed_white_ratio = 0.5
         self.target_white_ratio = 0.5
         self.current_eval_label = "0.0"
         self.current_eval_white_adv = True
 
-        # Интерактивный выбор клеток и стрелки
         self.selected_square = None
         self.legal_target_squares = []
         self.show_best_move_arrow = True
 
-        
         self.move_anim_active = False
         self.move_anim_data = None
         self.animating_combo = False
@@ -846,8 +1116,8 @@ class ChessAnalyzerGUI:
         self.combo_board = None
         self.combo_last_move = None
 
-        
         self.chat_cards = {}
+        self.history_Row_bounds = {}
         self.typing_step = 0
         self.sq_size = 64
         self.board_margin = 24
@@ -857,21 +1127,17 @@ class ChessAnalyzerGUI:
         self._build_layout()
         self._start_typing_animation()
 
-        
         self.root.bind("<Left>", lambda e: self.prev_move())
         self.root.bind("<Right>", lambda e: self.next_move())
-    
 
         threading.Thread(target=self._run_analysis_background, daemon=True).start()
 
-    
     def set_language(self, new_lang: str):
         if new_lang not in ("ru", "en") or self.lang == new_lang:
             return
         self.lang = new_lang
         tr = TRANSLATIONS[self.lang]
 
-        
         self.btn_prev.set_text_and_color(tr["btn_prev"])
         self.btn_next.set_text_and_color(tr["btn_next"])
         self.btn_flip.set_text_and_color(tr["btn_flip"])
@@ -886,31 +1152,31 @@ class ChessAnalyzerGUI:
                 tr["btn_return_live"].format(move=(self.latest_ply + 1) // 2), "#4A3222"
             )
 
-        
         self._draw_lang_switcher()
         self._redraw_player_cards()
         self._draw_chat_header()
         self._draw_typing_indicator()
+        self._redraw_move_history()
+        self._draw_eval_graph()
         for ply in list(self.chat_cards.keys()):
             self._draw_mistake_card(ply)
 
-    
     def _build_layout(self):
         tr = TRANSLATIONS[self.lang]
         self.main_container = tk.Frame(self.root, bg=THEME["bg_root"])
         self.main_container.pack(fill=tk.BOTH, expand=True, padx=18, pady=14)
 
-        self.main_container.columnconfigure(0, weight=6, minsize=640)
-        self.main_container.columnconfigure(1, weight=5, minsize=430)
+        self.main_container.columnconfigure(0, weight=7, minsize=780)
+        self.main_container.columnconfigure(1, weight=5, minsize=440)
         self.main_container.rowconfigure(0, weight=1)
 
-        
+        # ЛЕВАЯ КОЛОНКА
         self.left_col = tk.Frame(self.main_container, bg=THEME["bg_root"])
         self.left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         self.left_col.rowconfigure(1, weight=1)
         self.left_col.columnconfigure(0, weight=1)
 
-        
+        # Верхняя панель
         self.top_bar_frame = tk.Frame(self.left_col, bg=THEME["bg_root"])
         self.top_bar_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
@@ -927,9 +1193,43 @@ class ChessAnalyzerGUI:
         self.top_player_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.top_player_canvas.bind("<Configure>", lambda e: self._redraw_player_cards())
 
-        
-        self.board_stage = tk.Frame(self.left_col, bg=THEME["bg_root"])
-        self.board_stage.grid(row=1, column=0, sticky="nsew")
+        # Центральная сцена: слева История ходов, справа Доска
+        self.center_stage = tk.Frame(self.left_col, bg=THEME["bg_root"])
+        self.center_stage.grid(row=1, column=0, sticky="nsew")
+        self.center_stage.rowconfigure(0, weight=1)
+        self.center_stage.columnconfigure(1, weight=1)
+
+        # Панель интерактивной истории ходов
+        self.history_outer = tk.Frame(self.center_stage, width=200, bg=THEME["bg_panel"])
+        self.history_outer.grid(row=0, column=0, sticky="ns", padx=(0, 10), pady=2)
+        self.history_outer.grid_propagate(False)
+
+        self.history_header_canvas = tk.Canvas(
+            self.history_outer, height=48, bg=THEME["bg_panel_elev"], highlightthickness=0
+        )
+        self.history_header_canvas.pack(fill=tk.X)
+
+        self.history_body = tk.Frame(self.history_outer, bg=THEME["bg_panel"])
+        self.history_body.pack(fill=tk.BOTH, expand=True)
+
+        self.history_scroll = tk.Scrollbar(
+            self.history_body, orient=tk.VERTICAL,
+            bg=THEME["bg_panel"], troughcolor=THEME["bg_panel"], highlightthickness=0, bd=0
+        )
+        self.history_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.history_canvas = tk.Canvas(
+            self.history_body, bg=THEME["bg_panel"], highlightthickness=0,
+            yscrollcommand=self.history_scroll.set, cursor="hand2"
+        )
+        self.history_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.history_scroll.config(command=self.history_canvas.yview)
+        self.history_canvas.bind("<Configure>", lambda e: self._redraw_move_history())
+        self.history_canvas.bind("<Button-1>", self._on_history_click)
+
+        # Сцена самой шахматной доски
+        self.board_stage = tk.Frame(self.center_stage, bg=THEME["bg_root"])
+        self.board_stage.grid(row=0, column=1, sticky="nsew")
         self.board_stage.bind("<Configure>", self._on_board_stage_resize)
 
         self.board_canvas = tk.Canvas(
@@ -938,14 +1238,14 @@ class ChessAnalyzerGUI:
         self.board_canvas.pack(expand=True)
         self.board_canvas.bind("<Button-1>", self._on_board_click)
 
-        
+        # Карточка нижнего игрока
         self.bottom_player_canvas = tk.Canvas(
             self.left_col, height=68, bg=THEME["bg_root"], highlightthickness=0
         )
         self.bottom_player_canvas.grid(row=2, column=0, sticky="ew", pady=(8, 10))
         self.bottom_player_canvas.bind("<Configure>", lambda e: self._redraw_player_cards())
 
-        
+        # Панель кнопок управления
         self.controls_frame = tk.Frame(self.left_col, bg=THEME["bg_root"])
         self.controls_frame.grid(row=3, column=0, sticky="ew")
 
@@ -986,7 +1286,7 @@ class ChessAnalyzerGUI:
             bg_color="#4A3222", hover_color="#5E3F2B", width=156, height=44
         )
 
-        
+        # ПРАВАЯ КОЛОНКА (Чат ошибок сверху + График преимущества снизу)
         self.right_col = tk.Canvas(
             self.main_container, bg=THEME["bg_root"], highlightthickness=0
         )
@@ -1003,6 +1303,21 @@ class ChessAnalyzerGUI:
 
         tk.Frame(self.chat_wrapper, height=1, bg=THEME["border_subtle"]).pack(fill=tk.X)
 
+        # Нижний блок графика преимущества
+        self.graph_frame = tk.Frame(self.chat_wrapper, height=185, bg=THEME["bg_panel_elev"])
+        self.graph_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        self.graph_frame.pack_propagate(False)
+
+        tk.Frame(self.chat_wrapper, height=1, bg=THEME["border_subtle"]).pack(fill=tk.X, side=tk.BOTTOM)
+
+        self.graph_canvas = tk.Canvas(
+            self.graph_frame, bg=THEME["bg_panel_elev"], highlightthickness=0, cursor="hand2"
+        )
+        self.graph_canvas.pack(fill=tk.BOTH, expand=True)
+        self.graph_canvas.bind("<Configure>", lambda e: self._draw_eval_graph())
+        self.graph_canvas.bind("<Button-1>", self._on_graph_click)
+
+        # Центральное тело чата
         self.chat_body_frame = tk.Frame(self.chat_wrapper, bg=THEME["bg_panel"])
         self.chat_body_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -1036,7 +1351,219 @@ class ChessAnalyzerGUI:
         )
         self.typing_bubble_canvas.pack(fill=tk.X, pady=(6, 12), padx=4)
 
-    
+    # ---- ИНТЕРАКТИВНАЯ ИСТОРИЯ ХОДОВ (ПОСТЕПЕННОЕ ПОЯВЛЕНИЕ ПО ХОДУ ИГРЫ) ----
+    def _redraw_move_history(self):
+        hc = self.history_header_canvas
+        hc.delete("all")
+        hw = max(165, hc.winfo_width())
+        tr = TRANSLATIONS[self.lang]
+
+        if self.white_accuracy is not None and self.black_accuracy is not None:
+            hc.create_text(
+                hw / 2, 15, text=tr["history_title"],
+                fill=THEME["text_primary"], font=("Segoe UI", 10, "bold")
+            )
+            hc.create_text(
+                hw / 2, 34,
+                text=tr["acc_short"].format(w=self.white_accuracy, b=self.black_accuracy),
+                fill=THEME["accent_sage"], font=("Segoe UI", 8, "bold")
+            )
+        else:
+            hc.create_text(
+                hw / 2, 24, text=tr["history_title"],
+                fill=THEME["text_primary"], font=("Segoe UI", 10, "bold")
+            )
+
+        c = self.history_canvas
+        c.delete("all")
+        self.history_Row_bounds.clear()
+
+        w = max(175, c.winfo_width())
+        total_plies_available = len(self.move_meta_history) - 1
+
+        if total_plies_available <= 0:
+            c.create_text(
+                w / 2, 40, text=tr["analyzing_short"],
+                fill=THEME["text_muted"], font=("Segoe UI", 9, "italic")
+            )
+            c.configure(scrollregion=(0, 0, w, 100))
+            return
+
+        # Отображаем ТОЛЬКО те ходы, которые уже были сделаны к текущему моменту (до self.current_ply)
+        shown_plies = min(self.current_ply, total_plies_available)
+        if shown_plies <= 0:
+            c.create_text(
+                w / 2, 40, text=tr["history_empty"],
+                fill=THEME["text_muted"], font=("Segoe UI", 8, "italic")
+            )
+            c.configure(scrollregion=(0, 0, w, 100))
+            return
+
+        row_h = 30
+        num_col_w = 28
+        col_w = (w - num_col_w - 6) / 2
+        shown_rows = (shown_plies + 1) // 2
+
+        for row_idx in range(shown_rows):
+            y1 = 6 + row_idx * row_h
+            y2 = y1 + row_h - 2
+            cy = (y1 + y2) / 2
+
+            if row_idx % 2 == 1:
+                c.create_rectangle(2, y1, w - 2, y2, fill="#1C1A17", outline="")
+
+            c.create_text(
+                14, cy, text=f"{row_idx + 1}.",
+                fill=THEME["text_muted"], font=("Segoe UI", 8, "bold")
+            )
+
+            for side_i, ply in enumerate((row_idx * 2 + 1, row_idx * 2 + 2)):
+                if ply > shown_plies:
+                    continue
+                meta = self.move_meta_history[ply]
+                if not meta:
+                    continue
+
+                x1 = num_col_w + side_i * col_w
+                x2 = x1 + col_w - 2
+                self.history_Row_bounds[ply] = (x1, y1, x2, y2)
+
+                if ply == self.current_ply:
+                    create_rounded_rect(
+                        c, x1, y1 + 1, x2, y2 - 1, r=6,
+                        fill=THEME["bg_bubble_active"], outline=THEME["accent_ochre"], width=1.2
+                    )
+
+                # 1. Фигура, сделавшая ход
+                draw_classic_merida_piece(
+                    c, x1 + 11, cy, 18,
+                    meta["piece_type"], meta["is_white"]
+                )
+
+                # 2. Нотация хода
+                c.create_text(
+                    x1 + 22, cy, text=meta["san"], anchor="w",
+                    fill=THEME["text_primary"] if ply == self.current_ply else THEME["text_secondary"],
+                    font=("Segoe UI", 8, "bold" if ply == self.current_ply else "normal")
+                )
+
+                # 3. Значок оценки хода (без кружка, чисто символ соответствующего цвета)
+                draw_move_classification_badge(
+                    c, x2 - 9, cy, 7.5, meta["badge"]
+                )
+
+        total_h = max(120, 12 + shown_rows * row_h)
+        c.configure(scrollregion=(0, 0, w, total_h))
+
+        # Всегда прокручиваем вниз к только что сыгранному ходу
+        if shown_rows > 8:
+            c.yview_moveto(1.0)
+
+    def _on_history_click(self, event):
+        if not self.boards_history:
+            return
+        cx = self.history_canvas.canvasx(event.x)
+        cy = self.history_canvas.canvasy(event.y)
+        for ply, (x1, y1, x2, y2) in self.history_Row_bounds.items():
+            if x1 <= cx <= x2 and y1 <= cy <= y2:
+                self.stop_combo_animation()
+                self.selected_square = None
+                self.legal_target_squares = []
+                prev_board = self.boards_history[self.current_ply]
+                self.current_ply = ply
+                if self.current_ply > self.latest_ply:
+                    self.latest_ply = self.current_ply
+                self.update_view(animate_from_board=prev_board)
+                break
+
+    # ---- ГРАФИК ПРЕИМУЩЕСТВА В ПРОЦЕССЕ ПАРТИИ ----
+    def _draw_eval_graph(self):
+        c = self.graph_canvas
+        c.delete("all")
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w < 80 or h < 60:
+            return
+
+        tr = TRANSLATIONS[self.lang]
+        pad_l, pad_r, pad_t, pad_b = 16, 16, 28, 16
+        gw = max(40, w - pad_l - pad_r)
+        gh = max(30, h - pad_t - pad_b)
+        mid_y = pad_t + gh / 2.0
+
+        c.create_text(
+            pad_l, 14, text=tr["graph_title"], anchor="w",
+            fill=THEME["text_secondary"], font=("Segoe UI", 9, "bold")
+        )
+
+        create_rounded_rect(
+            c, pad_l, pad_t, pad_l + gw, pad_t + gh, r=10,
+            fill="#1A1816", outline=THEME["border_subtle"], width=1.2
+        )
+
+        c.create_line(
+            pad_l + 2, mid_y, pad_l + gw - 2, mid_y,
+            fill=THEME["border_subtle"], width=1.2, dash=(4, 3)
+        )
+
+        if not self.evals_history:
+            c.create_oval(
+                pad_l - 3.5, mid_y - 3.5, pad_l + 3.5, mid_y + 3.5,
+                fill=THEME["accent_ochre"], outline="#161513"
+            )
+            return
+
+        max_ply = max(1, len(self.evals_history) - 1)
+        shown_ply = min(self.current_ply, len(self.evals_history) - 1)
+
+        pts = []
+        for p in range(shown_ply + 1):
+            x = pad_l + (p / max_ply) * gw
+            if p == 0:
+                y = mid_y
+            else:
+                ev = self.evals_history[p]
+                ratio = eval_to_white_ratio(ev["cp_white"], ev["mate_white"])
+                y = pad_t + gh * (1.0 - ratio)
+            pts.append((p, x, y))
+
+        if len(pts) >= 2:
+            poly = [pts[0][1], mid_y]
+            for _, px, py in pts:
+                poly.extend([px, py])
+            poly.extend([pts[-1][1], mid_y])
+            c.create_polygon(poly, fill="#38322A", outline="")
+
+            line_coords = []
+            for _, px, py in pts:
+                line_coords.extend([px, py])
+            c.create_line(line_coords, fill=THEME["text_primary"], width=2.0, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+
+        for p, px, py in pts:
+            meta = self.move_meta_history[p] if p < len(self.move_meta_history) else None
+            badge = meta["badge"] if meta else None
+            dot_col = BADGE_STYLE[badge]["color"] if badge in BADGE_STYLE else THEME["accent_ochre"]
+            r = 4.2 if p == self.current_ply else 2.6
+            c.create_oval(px - r, py - r, px + r, py + r, fill=dot_col, outline="#161513", width=1)
+
+    def _on_graph_click(self, event):
+        if not self.evals_history or len(self.evals_history) <= 1:
+            return
+        w = self.graph_canvas.winfo_width()
+        pad_l, pad_r = 16, 16
+        gw = max(40, w - pad_l - pad_r)
+        rel_x = max(0.0, min(1.0, (event.x - pad_l) / gw))
+        target_ply = int(round(rel_x * (len(self.evals_history) - 1)))
+
+        self.stop_combo_animation()
+        self.selected_square = None
+        self.legal_target_squares = []
+        prev_board = self.boards_history[self.current_ply]
+        self.current_ply = target_ply
+        if self.current_ply > self.latest_ply:
+            self.latest_ply = self.current_ply
+        self.update_view(animate_from_board=prev_board)
+
     def _draw_lang_switcher(self):
         c = self.lang_switch_canvas
         c.delete("all")
@@ -1054,11 +1581,9 @@ class ChessAnalyzerGUI:
             fill=THEME["text_muted"], font=("Segoe UI", 8, "bold")
         )
 
-        
         mid_x = w / 2
         btn_y1, btn_y2 = 28, h - 8
 
-        
         ru_active = (self.lang == "ru")
         ru_fill = THEME["accent_ochre"] if ru_active else THEME["bg_panel_elev"]
         ru_fg = "#161513" if ru_active else THEME["text_primary"]
@@ -1068,7 +1593,6 @@ class ChessAnalyzerGUI:
         )
         c.create_text((8 + mid_x - 2) / 2, (btn_y1 + btn_y2) / 2, text="RU", fill=ru_fg, font=("Segoe UI", 9, "bold"))
 
-        
         en_active = (self.lang == "en")
         en_fill = THEME["accent_ochre"] if en_active else THEME["bg_panel_elev"]
         en_fg = "#161513" if en_active else THEME["text_primary"]
@@ -1085,7 +1609,6 @@ class ChessAnalyzerGUI:
         else:
             self.set_language("en")
 
-    
     def _redraw_player_cards(self):
         top_color = not self.bottom_color
         self._draw_single_player_card(self.top_player_canvas, top_color, is_top=True)
@@ -1128,9 +1651,13 @@ class ChessAnalyzerGUI:
         mat_diff = get_material_balance(board, color)
         mat_str = f"   +{mat_diff}" if mat_diff > 0 else ""
 
+        # Общая точность ходов игрока (Accuracy %)
+        player_acc = self.white_accuracy if color == chess.WHITE else self.black_accuracy
+        acc_str = f"   •   {tr['acc_label'].format(acc=player_acc)}" if player_acc is not None else ""
+
         canvas.create_text(
             66, h / 2 - 11,
-            text=f"{player_name}{elo_str}  •  {side_str}{mat_str}",
+            text=f"{player_name}{elo_str}  •  {side_str}{mat_str}{acc_str}",
             anchor="w", fill=THEME["text_primary"], font=("Segoe UI", 11, "bold")
         )
 
@@ -1172,7 +1699,6 @@ class ChessAnalyzerGUI:
                     anchor="e", fill=THEME["text_muted"], font=("Segoe UI", 9)
                 )
 
-    
     def flip_board(self):
         self.bottom_color = not self.bottom_color
         self._redraw_player_cards()
@@ -1184,7 +1710,6 @@ class ChessAnalyzerGUI:
                 combo_move=self.combo_last_move
             )
 
-    
     def _on_right_col_configure(self, event):
         self.right_col.delete("bg_card")
         w, h = event.width, event.height
@@ -1271,7 +1796,6 @@ class ChessAnalyzerGUI:
             fill=THEME["text_muted"], font=("Segoe UI", 9, "italic")
         )
 
-    
     def _ensure_mistake_message_in_chat(self, ply: int):
         if ply in self.chat_cards or ply not in self.errors_by_ply:
             return
@@ -1440,6 +1964,8 @@ class ChessAnalyzerGUI:
 
         prev_board = self.boards_history[self.current_ply] if self.boards_history else None
         self.current_ply = ply
+        if self.current_ply > self.latest_ply:
+            self.latest_ply = self.current_ply
         self.show_best_move_arrow = True
 
         if "btn_combo_in_card" in clicked_tags:
@@ -1460,14 +1986,47 @@ class ChessAnalyzerGUI:
         self.chat_stream_canvas.itemconfig(self.messages_window_id, width=event.width)
 
     def _on_mousewheel(self, event):
-        if self.chat_stream_canvas.winfo_containing(event.x_root, event.y_root):
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        if widget is None:
+            return
+        if str(widget).startswith(str(self.history_outer)):
+            self.history_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif str(widget).startswith(str(self.chat_body_frame)):
             self.chat_stream_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    
+    def _classify_move_badge(
+        self, ply: int, move: chess.Move, best_move: chess.Move,
+        cp_loss_mover: int, moves_uci_so_far: list, ml_prediction: str = None
+    ) -> str:
+        """Определяет иконку оценки для каждого полухода по первому референсу."""
+        if ml_prediction:
+            mapping = {
+                "blunder": "blunder",
+                "hanging_piece": "blunder",
+                "tactical_error": "miss",
+                "positional": "mistake",
+                "inaccuracy": "inaccuracy",
+            }
+            return mapping.get(ml_prediction, "mistake")
+
+        if is_book_ply(moves_uci_so_far):
+            return "book"
+        if best_move and move == best_move:
+            return "best"
+        if cp_loss_mover <= 12:
+            return "excellent"
+        if cp_loss_mover <= 35:
+            return "good"
+        if cp_loss_mover < 90:
+            return "inaccuracy"
+        if cp_loss_mover < 200:
+            return "mistake"
+        return "blunder"
+
     def _run_analysis_background(self):
         try:
-            model = joblib.load(MODEL_PATH)
-            pgn_string = get_last_game_pgn(USERNAME)
+            model = joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else None
+            pgn_string = get_last_game_pgn(TARGET_USERNAME)
             game = chess.pgn.read_game(io.StringIO(pgn_string))
 
             self.white_name = game.headers.get("White", "")
@@ -1475,7 +2034,15 @@ class ChessAnalyzerGUI:
             self.white_elo = game.headers.get("WhiteElo", "")
             self.black_elo = game.headers.get("BlackElo", "")
 
-            self.my_color = chess.WHITE if self.white_name.lower() == USERNAME.lower() else chess.BLACK
+            if self.white_name.lower() == USERNAME.lower():
+                self.my_color = chess.WHITE
+            elif self.black_name.lower() == USERNAME.lower():
+                self.my_color = chess.BLACK
+            elif self.white_name.lower() == TARGET_USERNAME.lower():
+                self.my_color = chess.WHITE
+            else:
+                self.my_color = chess.BLACK
+
             self.bottom_color = self.my_color
 
             opening_hdr = game.headers.get("Opening", "")
@@ -1488,6 +2055,10 @@ class ChessAnalyzerGUI:
             self.boards_history = [board.copy()]
             self.moves_history = [None]
             self.uci_history = []
+            self.move_meta_history = [None]
+
+            white_acc_scores = []
+            black_acc_scores = []
 
             feature_cols = ["cp_loss", "mat_diff", "hanging_diff", "mobility_diff", "best_gives_check"]
             ply = 0
@@ -1506,8 +2077,13 @@ class ChessAnalyzerGUI:
                     fen_before = board.fen()
                     board_before = board.copy()
 
+                    moved_piece = board_before.piece_at(move.from_square)
+                    piece_type = moved_piece.piece_type if moved_piece else chess.PAWN
+
                     played_san = board_before.san(move)
-                    score_before = prev_info["score"].pov(self.my_color).score(mate_score=2000)
+                    score_before_my = prev_info["score"].pov(self.my_color).score(mate_score=2000)
+                    score_before_mover = prev_info["score"].pov(turn_color).score(mate_score=2000)
+
                     best_pv = prev_info.get("pv", [])
                     best_move_engine = best_pv[0] if best_pv else None
                     best_san = board_before.san(best_move_engine) if best_move_engine else "—"
@@ -1519,7 +2095,15 @@ class ChessAnalyzerGUI:
                     self.uci_history.append(move.uci())
 
                     curr_info = engine.analyse(board, chess.engine.Limit(depth=ENGINE_DEPTH))
-                    score_after = curr_info["score"].pov(self.my_color).score(mate_score=2000)
+                    score_after_my = curr_info["score"].pov(self.my_color).score(mate_score=2000)
+                    score_after_mover = curr_info["score"].pov(turn_color).score(mate_score=2000)
+
+                    cp_loss_mover = max(0, (score_before_mover or 0) - (score_after_mover or 0))
+                    move_acc = compute_move_accuracy(cp_loss_mover)
+                    if turn_color == chess.WHITE:
+                        white_acc_scores.append(move_acc)
+                    else:
+                        black_acc_scores.append(move_acc)
 
                     w_pov = curr_info["score"].pov(chess.WHITE)
                     self.evals_history.append({
@@ -1530,9 +2114,11 @@ class ChessAnalyzerGUI:
                     punish_pv = curr_info.get("pv", [])
                     punish_line_san = board.variation_san(punish_pv[:5]) if punish_pv else ""
 
-                    if turn_color == self.my_color and score_before is not None and score_after is not None:
-                        cp_loss = score_before - score_after
-                        if cp_loss >= CP_LOSS_THRESHOLD and best_move_engine:
+                    ml_prediction_for_ply = None
+
+                    if turn_color == self.my_color and score_before_my is not None and score_after_my is not None:
+                        cp_loss = score_before_my - score_after_my
+                        if cp_loss >= CP_LOSS_THRESHOLD and best_move_engine and move != best_move_engine:
                             board_best = chess.Board(fen_before)
                             board_best.push(best_move_engine)
 
@@ -1545,15 +2131,19 @@ class ChessAnalyzerGUI:
                             attacked_after_best = list(board_best.attacks(best_move_engine.to_square))
                             attacked_names = ", ".join(chess.square_name(sq) for sq in attacked_after_best[:6])
 
-                            X_input = pd.DataFrame([{
-                                "cp_loss": cp_loss,
-                                "mat_diff": mat_diff,
-                                "hanging_diff": hanging_diff,
-                                "mobility_diff": mobility_diff,
-                                "best_gives_check": best_gives_check
-                            }])[feature_cols]
+                            if model is not None:
+                                X_input = pd.DataFrame([{
+                                    "cp_loss": cp_loss,
+                                    "mat_diff": mat_diff,
+                                    "hanging_diff": hanging_diff,
+                                    "mobility_diff": mobility_diff,
+                                    "best_gives_check": best_gives_check
+                                }])[feature_cols]
+                                prediction = model.predict(X_input)[0]
+                            else:
+                                prediction = "blunder" if cp_loss >= 200 else ("tactical_error" if cp_loss >= 120 else "inaccuracy")
 
-                            prediction = model.predict(X_input)[0]
+                            ml_prediction_for_ply = prediction
 
                             show_captured = prediction not in ("blunder", "hanging_piece")
                             if prediction in ("blunder", "hanging_piece"):
@@ -1581,7 +2171,25 @@ class ChessAnalyzerGUI:
                                 "combo_moves": combo_moves,
                             }
 
+                    badge_type = self._classify_move_badge(
+                        ply, move, best_move_engine, cp_loss_mover,
+                        self.uci_history[:ply], ml_prediction_for_ply
+                    )
+
+                    self.move_meta_history.append({
+                        "ply": ply,
+                        "move_number": board_before.fullmove_number,
+                        "is_white": (turn_color == chess.WHITE),
+                        "piece_type": piece_type,
+                        "san": played_san,
+                        "badge": badge_type,
+                        "to_sq": move.to_square,
+                    })
+
                     prev_info = curr_info
+
+            self.white_accuracy = (sum(white_acc_scores) / len(white_acc_scores)) if white_acc_scores else 100.0
+            self.black_accuracy = (sum(black_acc_scores) / len(black_acc_scores)) if black_acc_scores else 100.0
 
             self.analysis_finished = True
             self.root.after(0, self._on_analysis_complete)
@@ -1597,7 +2205,6 @@ class ChessAnalyzerGUI:
         self._draw_chat_header()
         self.update_view()
 
-    
     def prev_move(self):
         if not self.boards_history or self.current_ply <= 0:
             return
@@ -1634,7 +2241,6 @@ class ChessAnalyzerGUI:
         self.show_best_move_arrow = not self.show_best_move_arrow
         self.draw_board(self.boards_history[self.current_ply], error_info=self.errors_by_ply.get(self.current_ply))
 
-    
     def stop_combo_animation(self):
         if self.combo_timer:
             self.root.after_cancel(self.combo_timer)
@@ -1675,7 +2281,6 @@ class ChessAnalyzerGUI:
         if idx + 1 < len(moves_list):
             self.combo_timer = self.root.after(880, self._animate_combo_step, moves_list, idx + 1)
 
-    
     def _on_board_stage_resize(self, event):
         extra_w = self.eval_bar_width + self.eval_bar_gap + self.board_margin * 2
         extra_h = self.board_margin * 2
@@ -1750,7 +2355,6 @@ class ChessAnalyzerGUI:
 
         self.draw_board(board, error_info=self.errors_by_ply.get(self.current_ply))
 
-    
     def update_view(self, animate_from_board: chess.Board = None):
         if not self.boards_history:
             return
@@ -1770,6 +2374,8 @@ class ChessAnalyzerGUI:
             self._animate_eval_bar()
 
         self._redraw_player_cards()
+        self._redraw_move_history()
+        self._draw_eval_graph()
 
         self.btn_prev.set_state(self.current_ply > 0)
         self.btn_next.set_state(self.current_ply < len(self.boards_history) - 1)
@@ -1860,7 +2466,6 @@ class ChessAnalyzerGUI:
             self.move_anim_data = None
             self.draw_board(d["board_to"], error_info=d["error_info"], combo_move=d["combo_move"])
 
-    
     def _draw_evaluation_bar(self, c: tk.Canvas, board_px: int):
         bx1 = 4
         bx2 = self.eval_bar_width
@@ -2022,6 +2627,17 @@ class ChessAnalyzerGUI:
                 THEME["accent_ochre"], width=6
             )
 
+        # Отрисовка значка оценки хода (без кружка — чисто символ соответствующего цвета) на клетке доски
+        if not combo_move and not anim_piece and 0 < self.current_ply < len(self.move_meta_history):
+            meta = self.move_meta_history[self.current_ply]
+            if meta and meta.get("badge"):
+                bx, by = self.square_to_xy(meta["to_sq"])
+                badge_r = max(10.0, self.sq_size * 0.19)
+                draw_move_classification_badge(
+                    c, bx + self.sq_size - badge_r * 0.90, by + badge_r * 0.90,
+                    badge_r, meta["badge"]
+                )
+
     def _draw_smooth_arrow(self, from_sq: chess.Square, to_sq: chess.Square, color: str, width: int = 6):
         x1, y1 = self.square_to_xy(from_sq)
         x2, y2 = self.square_to_xy(to_sq)
@@ -2036,32 +2652,24 @@ class ChessAnalyzerGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
+    root.withdraw()
 
-    if not USERNAME:
-        root.withdraw()
-        USERNAME = simpledialog.askstring("Chess.com Profile", "Enter your Chess.com username:", parent=root)
-        if not USERNAME:
-            raise SystemExit()
-        root.deiconify()
+    onboarding = StartupOnboardingDialog(root)
+    root.wait_window(onboarding.win)
 
-    if not os.path.exists(STOCKFISH_PATH):
-        alt_sf = os.path.join(os.getcwd(), "stockfish", "stockfish-windows-x86-64-universal.exe")
-        if os.path.exists(alt_sf):
-            STOCKFISH_PATH = alt_sf
-        else:
-            root.withdraw()
-            STOCKFISH_PATH = filedialog.askopenfilename(
-                title="Select Stockfish executable (.exe)",
-                filetypes=[("Executable files", "*.exe"), ("All files", "*.*")]
-            )
-            if not STOCKFISH_PATH:
-                raise SystemExit()
-            root.deiconify()
+    if not onboarding.completed:
+        raise SystemExit()
+
+    USERNAME = onboarding.my_username
+    TARGET_USERNAME = onboarding.target_username
+    STOCKFISH_PATH = onboarding.sf_path
+    USER_AGENT = f"ML-Chess-Analyzer/2.4 (user: {USERNAME})"
 
     if not os.path.exists(MODEL_PATH):
         alt_model = os.path.join(os.getcwd(), "chess_error_model.joblib")
         if os.path.exists(alt_model):
             MODEL_PATH = alt_model
 
+    root.deiconify()
     app = ChessAnalyzerGUI(root)
     root.mainloop()
