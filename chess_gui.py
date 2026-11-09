@@ -62,7 +62,7 @@ THEME = {
     "eval_black": "#26231F",       
 }
 
-# Цвета значков оценок в точности по первому референсу (без фонового кружка)
+
 BADGE_STYLE = {
     "brilliant": {"color": "#26C2A3"},
     "great":     {"color": "#749BBF"},
@@ -446,7 +446,7 @@ def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radi
     elif badge_type == "blunder":
         draw_outlined_text("??", max(8, int(radius * 1.35)))
     elif badge_type == "best":
-        # Пятиконечная звезда соответствующего цвета
+        
         pts = []
         for i in range(10):
             ang = -math.pi / 2 + i * math.pi / 5
@@ -454,7 +454,7 @@ def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radi
             pts.extend([cx + r * math.cos(ang), cy + r * math.sin(ang)])
         canvas.create_polygon(pts, fill=col, outline=shadow, width=max(1.2, radius * 0.14), joinstyle=tk.ROUND)
     elif badge_type == "good":
-        # Галочка (Checkmark)
+        
         lw = max(2.2, radius * 0.34)
         pts = [
             cx - radius * 0.65, cy + radius * 0.04,
@@ -464,7 +464,7 @@ def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radi
         canvas.create_line(pts, fill=shadow, width=lw + 2.2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
         canvas.create_line(pts, fill=col, width=lw, capstyle=tk.ROUND, joinstyle=tk.ROUND)
     elif badge_type == "miss":
-        # Крестик (X)
+        
         lw = max(2.2, radius * 0.34)
         d = radius * 0.55
         canvas.create_line(cx - d, cy - d, cx + d, cy + d, fill=shadow, width=lw + 2.2, capstyle=tk.ROUND)
@@ -472,7 +472,7 @@ def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radi
         canvas.create_line(cx - d, cy - d, cx + d, cy + d, fill=col, width=lw, capstyle=tk.ROUND)
         canvas.create_line(cx - d, cy + d, cx + d, cy - d, fill=col, width=lw, capstyle=tk.ROUND)
     elif badge_type == "book":
-        # Открытая книга
+        
         w = radius * 0.78
         h = radius * 0.58
         canvas.create_polygon(
@@ -485,7 +485,7 @@ def draw_move_classification_badge(canvas: tk.Canvas, cx: float, cy: float, radi
         )
         canvas.create_line(cx, cy - h * 0.7, cx, cy + h, fill=shadow, width=max(1.2, radius * 0.16))
     elif badge_type == "excellent":
-        # Палец вверх (Thumbs Up)
+        
         r = radius * 1.25
         canvas.create_rectangle(
             cx - r * 0.52, cy - r * 0.05, cx - r * 0.22, cy + r * 0.46,
@@ -1170,13 +1170,13 @@ class ChessAnalyzerGUI:
         self.main_container.columnconfigure(1, weight=5, minsize=440)
         self.main_container.rowconfigure(0, weight=1)
 
-        # ЛЕВАЯ КОЛОНКА
+        
         self.left_col = tk.Frame(self.main_container, bg=THEME["bg_root"])
         self.left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         self.left_col.rowconfigure(1, weight=1)
         self.left_col.columnconfigure(0, weight=1)
 
-        # Верхняя панель
+        
         self.top_bar_frame = tk.Frame(self.left_col, bg=THEME["bg_root"])
         self.top_bar_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
@@ -1193,13 +1193,13 @@ class ChessAnalyzerGUI:
         self.top_player_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.top_player_canvas.bind("<Configure>", lambda e: self._redraw_player_cards())
 
-        # Центральная сцена: слева История ходов, справа Доска
+        
         self.center_stage = tk.Frame(self.left_col, bg=THEME["bg_root"])
         self.center_stage.grid(row=1, column=0, sticky="nsew")
         self.center_stage.rowconfigure(0, weight=1)
         self.center_stage.columnconfigure(1, weight=1)
 
-        # Панель интерактивной истории ходов
+        
         self.history_outer = tk.Frame(self.center_stage, width=200, bg=THEME["bg_panel"])
         self.history_outer.grid(row=0, column=0, sticky="ns", padx=(0, 10), pady=2)
         self.history_outer.grid_propagate(False)
@@ -1227,7 +1227,7 @@ class ChessAnalyzerGUI:
         self.history_canvas.bind("<Configure>", lambda e: self._redraw_move_history())
         self.history_canvas.bind("<Button-1>", self._on_history_click)
 
-        # Сцена самой шахматной доски
+        
         self.board_stage = tk.Frame(self.center_stage, bg=THEME["bg_root"])
         self.board_stage.grid(row=0, column=1, sticky="nsew")
         self.board_stage.bind("<Configure>", self._on_board_stage_resize)
@@ -1238,14 +1238,14 @@ class ChessAnalyzerGUI:
         self.board_canvas.pack(expand=True)
         self.board_canvas.bind("<Button-1>", self._on_board_click)
 
-        # Карточка нижнего игрока
+        
         self.bottom_player_canvas = tk.Canvas(
             self.left_col, height=68, bg=THEME["bg_root"], highlightthickness=0
         )
         self.bottom_player_canvas.grid(row=2, column=0, sticky="ew", pady=(8, 10))
         self.bottom_player_canvas.bind("<Configure>", lambda e: self._redraw_player_cards())
 
-        # Панель кнопок управления
+        
         self.controls_frame = tk.Frame(self.left_col, bg=THEME["bg_root"])
         self.controls_frame.grid(row=3, column=0, sticky="ew")
 
@@ -1286,7 +1286,7 @@ class ChessAnalyzerGUI:
             bg_color="#4A3222", hover_color="#5E3F2B", width=156, height=44
         )
 
-        # ПРАВАЯ КОЛОНКА (Чат ошибок сверху + График преимущества снизу)
+        
         self.right_col = tk.Canvas(
             self.main_container, bg=THEME["bg_root"], highlightthickness=0
         )
@@ -1303,7 +1303,7 @@ class ChessAnalyzerGUI:
 
         tk.Frame(self.chat_wrapper, height=1, bg=THEME["border_subtle"]).pack(fill=tk.X)
 
-        # Нижний блок графика преимущества
+        
         self.graph_frame = tk.Frame(self.chat_wrapper, height=185, bg=THEME["bg_panel_elev"])
         self.graph_frame.pack(fill=tk.X, side=tk.BOTTOM)
         self.graph_frame.pack_propagate(False)
@@ -1317,7 +1317,7 @@ class ChessAnalyzerGUI:
         self.graph_canvas.bind("<Configure>", lambda e: self._draw_eval_graph())
         self.graph_canvas.bind("<Button-1>", self._on_graph_click)
 
-        # Центральное тело чата
+        
         self.chat_body_frame = tk.Frame(self.chat_wrapper, bg=THEME["bg_panel"])
         self.chat_body_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -1351,7 +1351,7 @@ class ChessAnalyzerGUI:
         )
         self.typing_bubble_canvas.pack(fill=tk.X, pady=(6, 12), padx=4)
 
-    # ---- ИНТЕРАКТИВНАЯ ИСТОРИЯ ХОДОВ (ПОСТЕПЕННОЕ ПОЯВЛЕНИЕ ПО ХОДУ ИГРЫ) ----
+    
     def _redraw_move_history(self):
         hc = self.history_header_canvas
         hc.delete("all")
@@ -1389,7 +1389,7 @@ class ChessAnalyzerGUI:
             c.configure(scrollregion=(0, 0, w, 100))
             return
 
-        # Отображаем ТОЛЬКО те ходы, которые уже были сделаны к текущему моменту (до self.current_ply)
+        
         shown_plies = min(self.current_ply, total_plies_available)
         if shown_plies <= 0:
             c.create_text(
@@ -1434,20 +1434,20 @@ class ChessAnalyzerGUI:
                         fill=THEME["bg_bubble_active"], outline=THEME["accent_ochre"], width=1.2
                     )
 
-                # 1. Фигура, сделавшая ход
+                
                 draw_classic_merida_piece(
                     c, x1 + 11, cy, 18,
                     meta["piece_type"], meta["is_white"]
                 )
 
-                # 2. Нотация хода
+                
                 c.create_text(
                     x1 + 22, cy, text=meta["san"], anchor="w",
                     fill=THEME["text_primary"] if ply == self.current_ply else THEME["text_secondary"],
                     font=("Segoe UI", 8, "bold" if ply == self.current_ply else "normal")
                 )
 
-                # 3. Значок оценки хода (без кружка, чисто символ соответствующего цвета)
+                
                 draw_move_classification_badge(
                     c, x2 - 9, cy, 7.5, meta["badge"]
                 )
@@ -1455,7 +1455,7 @@ class ChessAnalyzerGUI:
         total_h = max(120, 12 + shown_rows * row_h)
         c.configure(scrollregion=(0, 0, w, total_h))
 
-        # Всегда прокручиваем вниз к только что сыгранному ходу
+        
         if shown_rows > 8:
             c.yview_moveto(1.0)
 
@@ -1476,7 +1476,7 @@ class ChessAnalyzerGUI:
                 self.update_view(animate_from_board=prev_board)
                 break
 
-    # ---- ГРАФИК ПРЕИМУЩЕСТВА В ПРОЦЕССЕ ПАРТИИ ----
+    
     def _draw_eval_graph(self):
         c = self.graph_canvas
         c.delete("all")
@@ -2627,7 +2627,7 @@ class ChessAnalyzerGUI:
                 THEME["accent_ochre"], width=6
             )
 
-        # Отрисовка значка оценки хода (без кружка — чисто символ соответствующего цвета) на клетке доски
+        
         if not combo_move and not anim_piece and 0 < self.current_ply < len(self.move_meta_history):
             meta = self.move_meta_history[self.current_ply]
             if meta and meta.get("badge"):
